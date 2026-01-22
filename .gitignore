@@ -60,3 +60,48 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+.DS_Store
+.idea/
+*.iml
+*.iws
+MiniOrangeI/Assets.xcassets/AccentColor.colorset/
+MiniOrangeI.xcodeproj/
+*misc.xml
+
+
+# 敏感文件
+*.secret
+*.private
+.env
+.env.local
+Configuration/Private/
+
+# Xcode
+build/
+DerivedData/
+*.xcworkspace/xcuserdata
+*.xcodeproj/xcuserdata
+*.xcuserstate
+*.xccheckout
+
+# 依赖
+Pods/
+Packages/
+
+# 证书和描述文件
+*.cer
+*.p12
+*.mobileprovision
+*.provisionprofile
+
+# 系统
+Thumbs.db
+
+# IDE
+.vscode/
+*.swp
+*.swo
+
+# 日志
+*.log
+EOF
