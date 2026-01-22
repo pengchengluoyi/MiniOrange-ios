@@ -1,14 +1,22 @@
 import SwiftUI
 import Combine
-import AVFoundation
 
 class DeviceListViewModel: ObservableObject {
     @Published var devices: [Device] = []
+    private var timerCancellable: AnyCancellable?
     
     init() {
         WebSocketManager.shared.deviceListSubject
             .receive(on: DispatchQueue.main)
             .assign(to: &$devices)
+        
+        timerCancellable = Timer.publish(every: 1.0, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in self?.refreshIfConnected() }
+    }
+    
+    func refreshIfConnected() {
+        if WebSocketManager.shared.isConnected { fetchDevices() }
     }
     
     func fetchDevices() {
@@ -18,60 +26,145 @@ class DeviceListViewModel: ObservableObject {
 
 struct DeviceListView: View {
     @StateObject var viewModel = DeviceListViewModel()
+    @State private var showMyDeviceSettings = false
+    
+    var myDevice: Device? {
+        viewModel.devices.first { $0.sn == WebSocketManager.shared.clientSN }
+    }
+    
+    var remoteDevices: [Device] {
+        viewModel.devices
+            .filter { $0.sn != WebSocketManager.shared.clientSN }
+            .sorted { d1, d2 in
+                if d1.status == "online" && d2.status != "online" { return true }
+                if d1.status != "online" && d2.status == "online" { return false }
+                return d1.model < d2.model
+            }
+    }
     
     var body: some View {
-        NavigationView {
-            List(viewModel.devices) { device in
-                // 这里引用的是另一个文件里的 RemoteControlView
-                NavigationLink(destination: RemoteControlView(device: device)) {
-                    HStack {
-                        // 设备图标
-                        Image(systemName: getDeviceIcon(type: device.model))
-                            .font(.title2)
-                            .foregroundColor(.blue)
-                            .frame(width: 40)
+        NavigationStack {
+            ZStack {
+                Color(UIColor.systemGroupedBackground).ignoresSafeArea()
+                
+                ScrollView {
+                    VStack(spacing: 20) {
+                        if let myDevice = myDevice {
+                            MyDeviceCard(device: myDevice) { showMyDeviceSettings = true }
+                                .padding(.horizontal)
+                        }
                         
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(device.model).font(.headline)
-                                
-                                // 显示“本设备”字样
-                                if device.sn == WebSocketManager.shared.clientSN {
-                                    Text("本设备")
-                                        .font(.caption2.bold())
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(Color.blue.opacity(0.1))
-                                        .foregroundColor(.blue)
-                                        .cornerRadius(4)
-                                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.blue, lineWidth: 0.5))
+                        if !remoteDevices.isEmpty {
+                            VStack(alignment: .leading) {
+                                Text("在线设备").font(.caption).foregroundColor(.secondary).padding(.leading)
+                                LazyVStack(spacing: 12) {
+                                    ForEach(remoteDevices) { device in
+                                        NavigationLink(destination: DeviceDetailView(device: device)) {
+                                            RemoteDeviceRow(device: device)
+                                        }
+                                        .buttonStyle(PlainButtonStyle())
+                                    }
                                 }
                             }
-                            Text("SN: \(device.sn)").font(.caption).foregroundColor(.gray)
+                            .padding(.horizontal)
+                        } else {
+                            EmptyStateView()
                         }
-                        Spacer()
-                        Circle()
-                            .fill(device.status == "online" ? Color.green : Color.gray)
-                            .frame(width: 8, height: 8)
                     }
-                    .padding(.vertical, 4)
+                    .padding(.top)
                 }
             }
             .navigationTitle("设备列表")
-            .refreshable { viewModel.fetchDevices() }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: { viewModel.fetchDevices() }) {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+            }
+            .sheet(isPresented: $showMyDeviceSettings) {
+                if let device = myDevice {
+                    MyDeviceSettingsView(device: device)
+                }
+            }
         }
+        .showOfflineBanner()
         .onAppear {
+            // 强制刷新一次
             if WebSocketManager.shared.isConnected { viewModel.fetchDevices() }
         }
-        .onReceive(WebSocketManager.shared.$isConnected) { connected in
-            if connected { viewModel.fetchDevices() }
-        }
+        .onReceive(WebSocketManager.shared.$isConnected) { if $0 { viewModel.fetchDevices() } }
+    }
+}
+
+// 辅助视图
+struct RemoteDeviceRow: View {
+    let device: Device
+    
+    var iconName: String {
+        let m = device.model.lowercased()
+        if m.contains("win") || m.contains("pc") || m.contains("desktop") { return "desktopcomputer" }
+        if m.contains("mac") || m.contains("book") { return "laptopcomputer" }
+        if m.contains("ipad") || m.contains("tablet") { return "ipad" }
+        if m.contains("android") || m.contains("pixel") || m.contains("galaxy") { return "phone.connection" }
+        return "iphone"
     }
     
-    func getDeviceIcon(type: String) -> String {
-        let t = type.lowercased()
-        if t.contains("ios") || t.contains("iphone") { return "iphone" }
-        if t.contains("android") { return "candybarphone" }
-        return "desktopcomputer"
+    var body: some View {
+        HStack {
+            Image(systemName: iconName)
+                .foregroundColor(.blue)
+                .font(.title2)
+                .frame(width: 30)
+            
+            VStack(alignment: .leading) {
+                Text(device.model).font(.headline)
+                Text(device.sn).font(.caption).foregroundColor(.gray)
+            }
+            Spacer()
+            Circle().fill(device.status == "online" ? Color.green : Color.gray).frame(width: 8, height: 8)
+        }
+        .padding()
+        .background(Color.white)
+        .cornerRadius(10)
+    }
+}
+
+struct EmptyStateView: View {
+    var body: some View { Text("暂无设备").foregroundColor(.gray).padding(.top, 50) }
+}
+
+struct MyDeviceCard: View {
+    let device: Device
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("本机设备").font(.headline).foregroundColor(.white)
+                        Text("在线").font(.caption2).padding(4).background(Color.green).foregroundColor(.white).cornerRadius(4)
+                    }
+                    Text("SN: \(device.sn)").font(.caption).foregroundColor(.white.opacity(0.8))
+                }
+                Spacer()
+                Image(systemName: "iphone").font(.largeTitle).foregroundColor(.white)
+            }
+            .padding()
+            .background(LinearGradient(gradient: Gradient(colors: [.blue, .purple]), startPoint: .leading, endPoint: .trailing))
+            .cornerRadius(16)
+        }
+    }
+}
+
+struct MyDeviceSettingsView: View {
+    let device: Device
+    @Environment(\.presentationMode) var mode
+    var body: some View {
+        NavigationView {
+            List { HStack { Text("SN"); Spacer(); Text(device.sn) } }
+            .navigationTitle("本机设置")
+            .navigationBarItems(trailing: Button("关闭") { mode.wrappedValue.dismiss() })
+        }
     }
 }
