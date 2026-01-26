@@ -16,7 +16,10 @@ class DeviceListViewModel: ObservableObject {
     }
     
     func refreshIfConnected() {
-        if WebSocketManager.shared.isConnected { fetchDevices() }
+        // ✅ 恢复：如果已下线，停止轮询，避免刷屏报错
+        if WebSocketManager.shared.isConnected && !WebSocketManager.shared.isDeviceOfflineFromCluster {
+            fetchDevices()
+        }
     }
     
     func fetchDevices() {
@@ -88,7 +91,7 @@ struct DeviceListView: View {
                 }
             }
         }
-        .showOfflineBanner()
+        .showOfflineBanner() // ✅ 恢复 Banner
         .onAppear {
             // 强制刷新一次
             if WebSocketManager.shared.isConnected { viewModel.fetchDevices() }

@@ -4,11 +4,10 @@ import Combine
 struct ServerConfig: Codable, Identifiable, Equatable {
     var id = UUID().uuidString
     let u: String // URL
-    let t: String // Token
     var name: String? // 别名
     
     static func == (lhs: ServerConfig, rhs: ServerConfig) -> Bool {
-        return lhs.u == rhs.u && lhs.t == rhs.t
+        return lhs.u == rhs.u
     }
 }
 
@@ -35,7 +34,7 @@ class ServerManager: ObservableObject {
            let server = savedServers.first(where: { $0.id == lastId }) {
             self.currentServer = server
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                WebSocketManager.shared.setup(url: server.u, token: server.t)
+                WebSocketManager.shared.setup(url: server.u)
             }
         }
     }
@@ -78,7 +77,7 @@ class ServerManager: ObservableObject {
         self.currentServer = server
         UserDefaults.standard.set(server.id, forKey: currentKey)
         DispatchQueue.main.async {
-            WebSocketManager.shared.setup(url: server.u, token: server.t)
+            WebSocketManager.shared.setup(url: server.u)
         }
     }
     

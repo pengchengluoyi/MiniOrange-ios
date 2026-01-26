@@ -1,15 +1,24 @@
 import SwiftUI
 @preconcurrency import AVFoundation
 
+// 🔥 新的二维码数据模型
+struct ProvisioningQRData: Codable {
+    let v: Int?       // version
+    let type: String? // "provisioning"
+    let n: String?    // Hostname
+    let u: [String]   // URLs list
+}
+
 struct ConnectionView: View {
-    // 监听 WebSocketManager 状态，以便在连接成功/失败时做出反应
     @ObservedObject var wsManager = WebSocketManager.shared
     @State private var isScanning = false
-    @State private var isProcessing = false // 新增：防止重复处理
-    @State private var showErrorAlert = false // 控制错误弹窗
+    @State private var isProcessing = false
+    @State private var showErrorAlert = false
     @State private var errorMessage = ""
-    @State private var tempConfig: ConnectionConfig? // 临时存储配置，连接成功后再保存
-    @AppStorage("connectionConfig") private var storedConfigData: Data = Data()
+    @State private var showSuccessAlert = false // 新增成功提示
+    
+    // 如果已经连接了 Server，我们就不跳转，而是弹窗提示"添加节点成功"
+    @Environment(\.dismiss) var dismiss
     
     var onConnect: () -> Void
     
@@ -25,14 +34,14 @@ struct ConnectionView: View {
                 .font(.largeTitle)
                 .fontWeight(.bold)
             
-            Text("Scan the QR code on your PC server to connect.")
+            Text("Scan the QR code on your PC to bind it.")
                 .multilineTextAlignment(.center)
                 .foregroundColor(.gray)
                 .padding(.horizontal)
             
             Button(action: {
                 isScanning = true
-                isProcessing = false // 重置状态
+                isProcessing = false
             }) {
                 HStack {
                     Image(systemName: "qrcode.viewfinder")
@@ -46,6 +55,13 @@ struct ConnectionView: View {
                 .cornerRadius(12)
             }
             .padding(.horizontal, 40)
+            
+            if !ServerManager.shared.savedServers.isEmpty {
+                Button("Use Saved Servers") {
+                   onConnect() // 如果有缓存，允许跳过扫码直接进入
+                }
+                .padding(.top)
+            }
         }
         .sheet(isPresented: $isScanning) {
             QRScannerView { code in
@@ -53,16 +69,15 @@ struct ConnectionView: View {
                 handleScan(code)
             }
         }
-        // Loading 遮罩：当正在连接时显示
         .overlay {
-            if wsManager.isConnecting {
+            if isProcessing {
                 ZStack {
                     Color.black.opacity(0.4).ignoresSafeArea()
                     VStack(spacing: 16) {
                         ProgressView()
                             .scaleEffect(1.5)
                             .tint(.white)
-                        Text("Connecting to Server...")
+                        Text("Configuring Device...")
                             .font(.headline)
                             .foregroundColor(.white)
                     }
@@ -72,58 +87,95 @@ struct ConnectionView: View {
                 }
             }
         }
-        // 错误弹窗
-        .alert("Connection Failed", isPresented: $showErrorAlert) {
-            Button("OK") {
-                isProcessing = false // 重置处理状态，允许再次扫码
-            }
+        .alert("Configuration Failed", isPresented: $showErrorAlert) {
+            Button("OK") { isProcessing = false }
         } message: {
             Text(errorMessage)
-        }
-        // 监听连接状态变化
-        .onChange(of: wsManager.isConnected, initial: false) { _, connected in
-            if connected, let config = tempConfig {
-                print("✅ 连接成功，保存配置并进入主界面")
-                // 只有连接成功才保存配置
-                if let encoded = try? JSONEncoder().encode(config) {
-                    storedConfigData = encoded
-                    // 触发 App 入口切换视图
-                }
-            }
-        }
-        // 监听连接过程结束（用于捕获失败）
-        .onChange(of: wsManager.isConnecting, initial: false) { _, connecting in
-            // 如果连接过程结束，但未连接成功，且我们有待处理的配置，说明连接失败
-            if !connecting && !wsManager.isConnected && tempConfig != nil {
-                print("❌ 连接尝试失败")
-                errorMessage = "Unable to connect to server.\nPlease check your network, URL, or server status."
-                showErrorAlert = true
-                tempConfig = nil // 清除临时配置
-            }
         }
     }
     
     private func handleScan(_ code: String) {
-        guard !isProcessing else { return } // 如果正在处理，直接忽略后续扫描
+        guard !isProcessing else { return }
         isProcessing = true
         
-        print("📸 [ConnectionView] 扫描到的原始数据: \(code)")
+        print("📸 [Scan] Code: \(code)")
         
+        // 1. 第一步：先尝试解析 JSON
+        // data(using:) 和 decode(...) 都会返回 Optional，所以这里用 guard let
         guard let data = code.data(using: .utf8),
-              let config = try? JSONDecoder().decode(ConnectionConfig.self, from: data) else {
-            print("❌ [ConnectionView] 二维码格式错误，无法解析 JSON")
+              let qrData = try? JSONDecoder().decode(ProvisioningQRData.self, from: data) else {
+            // 如果解析失败
+            errorMessage = "Invalid QR Code format."
+            showErrorAlert = true
+            isProcessing = false
+            return
+        }
+
+        // 🔥 获取所有可能的地址 (服务端已经过滤了无效的，剩下的都是潜在可用的)
+        let candidates = qrData.u
+        guard !candidates.isEmpty else {
+            // ... 错误处理 ...
             return
         }
         
-        print("✅ [ConnectionView] 解析成功! Token: \(config.t)")
-        print("🔗 [ConnectionView] 目标服务器: \(config.u)")
+        print("🚦 [Race] 准备开始，候选列表: \(candidates)")
         
-        // 优化：不立即保存配置，而是先尝试连接
-        self.tempConfig = config
-        // 调用 setup 会触发 connect()，并更新 isConnecting 状态
-        WebSocketManager.shared.setup(url: config.u, token: config.t)
+        // 🚀 启动异步任务进行赛马
+        Task {
+            // 1. 找出最快的地址
+            if let winnerUrl = await WebSocketManager.shared.raceToFindFastestHost(urls: candidates) {
+                
+                // 2. 找到赢家，开始正常流程
+                await MainActor.run {
+                    print("🔗 [Connection] 使用优选线路: \(winnerUrl)")
+                    
+                    // 决策：配置 Master 还是 Node (逻辑保持不变)
+                    let currentServer = ServerManager.shared.currentServer
+                    let isConfiguringNode = (wsManager.isConnected && currentServer != nil)
+                    
+                    var masterUrlForTarget = ""
+                    if isConfiguringNode {
+                         masterUrlForTarget = currentServer!.u
+                    } else {
+                         masterUrlForTarget = winnerUrl // 赢家即是 Master
+                    }
+                    
+                    Task {
+                        do {
+                            // 3. 使用赢家地址进行配网
+                            try await wsManager.provisionDevice(targetAddress: winnerUrl, masterUrl: masterUrlForTarget)
+                            
+                            // 4. 后续保存逻辑...
+                            try await Task.sleep(nanoseconds: 2 * 1_000_000_000)
+                            
+                            if !isConfiguringNode {
+                                let newName = qrData.n ?? "New Server"
+                                // ✅ 关键：保存的是这个测试通过的 winnerUrl
+                                let config = ServerConfig(u: winnerUrl, name: newName)
+                                ServerManager.shared.addServer(config)
+                                ServerManager.shared.switchTo(config)
+                                onConnect()
+                            } else {
+                                isProcessing = false
+                            }
+                        } catch {
+                            // ... 错误处理 ...
+                            isProcessing = false
+                        }
+                    }
+                }
+            } else {
+                // 3. 赛马全部失败 (所有地址都连不上)
+                await MainActor.run {
+                    errorMessage = "无法连接到服务器。\n已尝试所有地址均超时。\n请检查防火墙或网络设置。"
+                    showErrorAlert = true
+                    isProcessing = false
+                }
+            }
+        }
     }
 }
+// QRScannerView 保持不变...
 
 // MARK: - QR Scanner Helper
 struct QRScannerView: UIViewControllerRepresentable {

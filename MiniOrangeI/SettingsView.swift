@@ -153,7 +153,7 @@ struct SettingsView: View {
               let config = try? JSONDecoder().decode(ConnectionConfig.self, from: data) else { return }
         
         let newName = "Server \(serverManager.savedServers.count + 1)"
-        let newServerConfig = ServerConfig(u: config.u, t: config.t, name: newName)
+        let newServerConfig = ServerConfig(u: config.u, name: newName)
         
         // 调用 ServerManager 检查是否重复
         let result = serverManager.addServer(newServerConfig)

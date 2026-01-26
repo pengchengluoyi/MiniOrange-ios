@@ -94,14 +94,17 @@ struct SideControlMenu: View {
                     Group {
                         MenuButton(icon: "xmark.circle.fill", color: .red, label: "断开", action: onDisconnect)
                         MenuButton(icon: "keyboard", label: "键盘", action: onToggleKeyboard)
+                        MenuButton(icon: "square.stack.3d.up", label: "通知") {
+                            WebSocketManager.shared.sendAction("83", deviceSN: deviceSN)
+                        }
                         MenuButton(icon: "square.stack.3d.up", label: "后台") {
-                            WebSocketManager.shared.sendAction("app_switch", deviceSN: deviceSN)
+                            WebSocketManager.shared.sendAction("187", deviceSN: deviceSN)
                         }
                         MenuButton(icon: "house.fill", label: "桌面") {
-                            WebSocketManager.shared.sendAction("home", deviceSN: deviceSN)
+                            WebSocketManager.shared.sendAction("3", deviceSN: deviceSN)
                         }
                         MenuButton(icon: "arrow.uturn.backward", label: "返回") {
-                            WebSocketManager.shared.sendAction("back", deviceSN: deviceSN)
+                            WebSocketManager.shared.sendAction("4", deviceSN: deviceSN)
                         }
                     }
                     .transition(.move(edge: .trailing).combined(with: .opacity))
